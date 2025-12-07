@@ -1,6 +1,6 @@
 # llm-deepseek
 
-[![PyPI](https://img.shields.io/pypi/v/llm-hyperbolic.svg)](https://pypi.org/project/llm-deepseek-xtreme/0.1.0/)
+[![PyPI](https://img.shields.io/pypi/v/llm-deepseek-xtreme.svg)](https://pypi.org/project/llm-deepseek-xtreme/)
 [![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/ghostofpokemon/llm-deepseek?include_prereleases)](https://github.com/ghostofpokemon/llm-deepseek/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ghostofpokemon/llm-deepseek/blob/main/LICENSE)
 
@@ -23,6 +23,16 @@ llm keys set deepseek
 # Paste key here
 ```
 
+### Models (DeepSeek-V3.2)
+
+- `deepseek-chat`: V3.2 non-thinking mode, 128K context, json output + tool calls + chat prefix completion
+- `deepseek-reasoner`: V3.2 thinking mode, 128K context, json output + tool calls + chat prefix completion; reasoning always shown
+- `deepseek-reasoner-speciale`: V3.2-Speciale thinking-only endpoint at `https://api.deepseek.com/v3.2_speciale_expires_on_20251215`, up to 128K output, no tools/json/prefix completion (auto-registered)
+
+Chat/reasoner calls use `https://api.deepseek.com` (Speciale uses its own base automatically). Text completions/FIM automatically use the beta endpoint `https://api.deepseek.com/beta`.
+
+Pricing (from https://api-docs.deepseek.com/quick_start/pricing): $0.028/M input tokens (cache hit), $0.28/M input tokens (cache miss), $0.42/M output tokens.
+
 Run `llm models` to list the models, and `llm models --options` to include a list of their options.
 
 ### Running Prompts
@@ -41,14 +51,11 @@ Note: The DeepSeek Reasoner model only supports the chat endpoint, not the compl
 
 The DeepSeek Reasoner model uses a Chain of Thought (CoT) approach to solve complex problems, showing its reasoning process before providing the final answer.
 
-The plugin shows the model's chain of thought reasoning by default in non-streaming mode. The reasoning feature is currently only supported in non-streaming mode.
+The plugin always shows the model's chain of thought reasoning in non-streaming mode. The reasoning feature is currently only supported in non-streaming mode.
 
 ```bash
 # Normal usage - will show reasoning by default
 llm -m deepseek-reasoner "What is 537 * 943?"
-
-# Hide reasoning when you only want the final answer
-llm -m deepseek-reasoner "What is 537 * 943?" -o show_reasoning false
 ```
 
 ### New Features
@@ -99,4 +106,12 @@ To set up this plugin locally, first checkout the code. Then create a new virtua
 cd llm-deepseek
 python3 -m venv venv
 source venv/bin/activate
+```
+
+Publish to PyPI after bumping the version:
+
+```bash
+pip install -e '.[test]' build twine
+python -m build
+twine upload dist/*
 ```

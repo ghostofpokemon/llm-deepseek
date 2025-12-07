@@ -1,12 +1,12 @@
 [project]
 name = "llm-deepseek-xtreme"
-version = "0.1.0"
+version = "0.2.2"
 description = "LLM access to DeepSeek's API"
 readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = ["License :: OSI Approved :: Apache Software License"]
 requires-python = ">=3.8"
-dependencies = ["llm", "httpx"]
+dependencies = ["llm", "httpx", "rich"]
 authors = [{ name = "Nick Mystic" }]
 
 [project.urls]

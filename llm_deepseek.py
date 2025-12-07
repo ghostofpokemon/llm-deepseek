@@ -1,5 +1,6 @@
 import llm
 from llm.default_plugins.openai_models import Chat, Completion
+from llm.utils import remove_dict_none_values
 from pathlib import Path
 import json
 import time
@@ -8,10 +9,25 @@ import os
 from typing import Optional
 from pydantic import Field
 
+try:
+    from rich.console import Console
+    from rich.style import Style
+except Exception:  # rich is optional; fall back to plain output
+    Console = None
+    Style = None
+
 # Constants for cache timeout and API base URL
 CACHE_TIMEOUT = 3600
-DEEPSEEK_API_BASE = "https://api.deepseek.com/beta"  # For inference
-DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"  # For listing models
+DEFAULT_API_BASE = "https://api.deepseek.com"
+DEEPSEEK_API_BASE = os.environ.get("LLM_DEEPSEEK_BASE_URL", DEFAULT_API_BASE)
+DEEPSEEK_BETA_API_BASE = os.environ.get(
+    "LLM_DEEPSEEK_BETA_BASE_URL", f"{DEFAULT_API_BASE}/beta"
+)
+# Speciale endpoint is available out of the box; no env config required.
+DEEPSEEK_SPECIALE_BASE = "https://api.deepseek.com/v3.2_speciale_expires_on_20251215"
+DEEPSEEK_MODELS_URL = os.environ.get(
+    "LLM_DEEPSEEK_MODELS_URL", "https://api.deepseek.com/models"
+)
 
 def get_deepseek_models():
     """Fetch and cache DeepSeek models."""
@@ -32,9 +48,11 @@ class DeepSeekChat(Chat):
     needs_key = "deepseek"
     key_env_var = "LLM_DEEPSEEK_KEY"
 
-    def __init__(self, model_id, **kwargs):
+    def __init__(self, model_id, api_base=None, **kwargs):
         super().__init__(model_id, **kwargs)
-        self.api_base = DEEPSEEK_API_BASE
+        self.api_base = api_base or DEEPSEEK_API_BASE
+        self.console = Console() if Console else None
+        self.reasoning_style = Style(color="cyan", dim=True, italic=True) if Style else None
 
     def __str__(self):
         return f"DeepSeek Chat: {self.model_id}"
@@ -48,15 +66,11 @@ class DeepSeekChat(Chat):
             description="Format of the response (e.g., 'json_object').",
             default=None
         )
-        show_reasoning: Optional[bool] = Field(
-            description="Show the chain of thought reasoning for the DeepSeek Reasoner model.",
-            default=True
-        )
 
     def execute(self, prompt, stream, response, conversation, key=None):
         messages = self._build_messages(conversation, prompt)
         response._prompt_json = {"messages": messages}
-        kwargs = self.build_kwargs(prompt, stream)
+        kwargs = remove_dict_none_values(self.build_kwargs(prompt, stream))
 
         max_tokens = kwargs.pop('max_tokens', 8192)
         if prompt.options.response_format:
@@ -65,7 +79,6 @@ class DeepSeekChat(Chat):
         # Remove options that aren't supported by the OpenAI client
         kwargs.pop('prefill', None)
         kwargs.pop('show_reasoning', None)
-        show_reasoning = prompt.options.show_reasoning
 
         client = self.get_client(key)
 
@@ -79,36 +92,58 @@ class DeepSeekChat(Chat):
             )
 
             if stream:
-                for chunk in completion:
-                    # Stream both reasoning content and regular content directly
-                    content = chunk.choices[0].delta.content
-                    reasoning_content = getattr(chunk.choices[0].delta, "reasoning_content", None)
-                    
-                    if reasoning_content is not None and show_reasoning:
-                        yield reasoning_content
-                        
-                    if content is not None:
-                        yield content
+                yield from self._stream_completion(completion)
             else:
-                # For non-streaming response
-                content = completion.choices[0].message.content
-                # If we have reasoning content and want to show it
-                if show_reasoning and hasattr(completion.choices[0].message, "reasoning_content"):
-                    reasoning = completion.choices[0].message.reasoning_content
-                    if reasoning:
-                        yield reasoning
-                        yield "\n\n"
-                # Then output the regular content
-                yield content
+                yield from self._non_stream_completion(completion)
 
             response.response_json = {"content": "".join(response._chunks)}
-            
+
             # Store reasoning_content in response if available
             if not stream and hasattr(completion.choices[0].message, "reasoning_content"):
                 response.response_json["reasoning_content"] = completion.choices[0].message.reasoning_content
                 
         except httpx.HTTPError as e:
             raise llm.ModelError(f"DeepSeek API error: {str(e)}")
+
+    def _stream_completion(self, completion):
+        reasoning_started = False
+
+        for chunk in completion:
+            delta = chunk.choices[0].delta
+
+            reasoning_content = getattr(delta, "reasoning_content", None)
+            if reasoning_content:
+                if self.console and not reasoning_started:
+                    self.console.print("\n[Reasoning]\n\n", style=self.reasoning_style, end="")
+                    reasoning_started = True
+                if self.console:
+                    self.console.print(reasoning_content, style=self.reasoning_style, end="")
+                else:
+                    yield reasoning_content
+
+            content = delta.content
+            if content:
+                if self.console and reasoning_started:
+                    self.console.print("\n[Response]\n\n", style="bold green", end="")
+                    reasoning_started = False
+                yield content
+
+    def _non_stream_completion(self, completion):
+        message = completion.choices[0].message
+
+        if hasattr(message, "reasoning_content") and message.reasoning_content:
+            reasoning = message.reasoning_content
+            if self.console:
+                self.console.print("\n[Reasoning]\n\n", style=self.reasoning_style)
+                self.console.print(reasoning, style=self.reasoning_style)
+                self.console.print("\n[Response]\n\n", style="bold green", end="")
+            else:
+                yield reasoning
+                yield "\n\n"
+
+        content = message.content
+        if content:
+            yield content
 
     def _build_messages(self, conversation, prompt):
         """Build the messages list for the API call."""
@@ -146,9 +181,11 @@ class DeepSeekCompletion(Completion):
     needs_key = "deepseek"
     key_env_var = "LLM_DEEPSEEK_KEY"
 
-    def __init__(self, model_id, **kwargs):
+    def __init__(self, model_id, api_base=None, **kwargs):
         super().__init__(model_id, **kwargs)
-        self.api_base = DEEPSEEK_API_BASE
+        # Text completions (including FIM beta) still run on the beta endpoint
+        # so we expose a separate override to keep compatibility.
+        self.api_base = api_base or DEEPSEEK_BETA_API_BASE
 
     def __str__(self):
         return f"DeepSeek Completion: {self.model_id}"
@@ -166,7 +203,7 @@ class DeepSeekCompletion(Completion):
     def execute(self, prompt, stream, response, conversation, key=None):
         full_prompt = self._build_full_prompt(conversation, prompt)
         response._prompt_json = {"prompt": full_prompt}
-        kwargs = self.build_kwargs(prompt, stream)
+        kwargs = remove_dict_none_values(self.build_kwargs(prompt, stream))
 
         max_tokens = kwargs.pop('max_tokens', 4096)
         if prompt.options.echo:
@@ -175,6 +212,7 @@ class DeepSeekCompletion(Completion):
         # Remove custom options from kwargs
         kwargs.pop('prefill', None)
         kwargs.pop('show_reasoning', None)  # Remove if it exists
+        kwargs.pop('thinking', None)
 
         client = self.get_client(key)
 
@@ -267,6 +305,16 @@ def register_models(register):
                 ),
                 aliases=[model_id]
             )
+
+        # Register the Speciale thinking-only variant explicitly with a clear name
+        register(
+            DeepSeekChat(
+                model_id="deepseekchat/deepseek-reasoner-speciale",
+                model_name="deepseek-reasoner",
+                api_base=DEEPSEEK_SPECIALE_BASE,
+            ),
+            aliases=["deepseek-reasoner-speciale"]
+        )
         
         # Then register Completion models (excluding reasoner)
         for model_id, aliases in models_with_aliases:
@@ -299,6 +347,12 @@ def register_commands(cli):
                 print(f"DeepSeek Chat: deepseekchat/{model_id}")
                 print(f"  Aliases: {model_id}")
                 print()
+
+            # Speciale thinking-only model
+            print("DeepSeek Chat: deepseekchat/deepseek-reasoner-speciale")
+            print(f"  Aliases: deepseek-reasoner-speciale")
+            print(f"  Base URL: {DEEPSEEK_SPECIALE_BASE}")
+            print()
             
             # Then display all Completion models (excluding reasoner)
             for model_id, aliases in models_with_aliases:
@@ -308,4 +362,3 @@ def register_commands(cli):
                     print()
         except DownloadError as e:
             print(f"Error fetching DeepSeek models: {e}")
-
