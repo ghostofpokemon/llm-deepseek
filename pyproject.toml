@@ -27,3 +27,6 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [build-system]
 requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["llm_deepseek"]
