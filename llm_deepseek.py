@@ -265,7 +265,7 @@ class DeepSeekCompletion(Completion):
 class DownloadError(Exception):
     pass
 
-def fetch_cached_json(url, path, cache_timeout, headers=None):
+def fetch_cached_json(url, path, cache_timeout, headers=None, **kwargs):
     """Fetch JSON data from a URL and cache it."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,17 +275,17 @@ def fetch_cached_json(url, path, cache_timeout, headers=None):
             return json.load(file)
 
     try:
-        response = httpx.get(url, headers=headers, follow_redirects=True)
+        response = httpx.get(url, headers=headers, follow_redirects=True, timeout=1.5, **kwargs)
         response.raise_for_status()
         with open(path, "w") as file:
             json.dump(response.json(), file)
         return response.json()
-    except httpx.HTTPError:
+    except Exception:
         if path.is_file():
             with open(path, "r") as file:
                 return json.load(file)
         else:
-            raise DownloadError(f"Failed to download data and no cache is available at {path}")
+            return {"data": []}
 
 @llm.hookimpl
 def register_models(register):
