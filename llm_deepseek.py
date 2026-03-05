@@ -285,6 +285,8 @@ def fetch_cached_json(url, path, cache_timeout, headers=None, **kwargs):
             with open(path, "r") as file:
                 return json.load(file)
         else:
+            with open(path, "w") as file:
+                json.dump({"data": []}, file)
             return {"data": []}
 
 @llm.hookimpl
